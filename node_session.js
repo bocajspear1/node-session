@@ -27,6 +27,7 @@ function node_session_object()
 		// Setting for httponly in cookie, on by default
 		this.http_only = ''
 		
+		// Setting for Secure in cookie, off by default
 		this.secure_only = '';
 		
 		// Stores value for cookie path, default is '/'
@@ -35,21 +36,19 @@ function node_session_object()
 		// Stores value for cookie domain, default is blank
 		this.cookie_domain = '';
 		
-		// By default, check by ip address to mitigate using cookies from elsewhere
+		//  Indicates if we should check by ip address to mitigate using cookies sent from other devices. may break stuff that will attempt access through multiple IP addresses
 		this.ip_matching = true;
 		
+		// Indicates of we should check by matching the user agent to mitigate cookie being used from locations other than the original user
 		this.user_agent_matching = true;
-		
-		this.time_offsest = '';
-		
-		// The database connection
-		this.mongoclient = require('mongodb').MongoClient;
-		this.mongo_string = '';
-		
+				
 		// Holds sessions that will be regenerated on next request
 		this.to_stop = [];
 		
-		// Storage for functions
+		
+		/*
+		 * This area holds the on... functions which will be run on their respective events
+		 */
 		
 		// This function will be run on session removal, including ones that are not being directly removed manually
 		this.on_session_destroy;
@@ -78,13 +77,12 @@ function node_session_object()
 		this.setup = setup;
 		function setup(values)
 			{
-				// Get the connection string for database access
-				if (values.connection_url)
+				
+				// Check if this is being set up as middleware, which will call next() instead of next(request,reponse)
+				if (values.is_middleware)
 					{
-						this.mongo_string = values.connection_url;
-					}else{
-						throw new Error('No database connection string has been given');
-					}
+						this.is_middleware = values.is_middleware;
+					} 
 				
 				// Check if there are can be an expire time for the session
 				if (!values.expire_time&&!values.session_expire_time)
@@ -184,18 +182,36 @@ function node_session_object()
 						this.storage = values.storage;
 						this.storage.on_save = this.on_session_update;
 						this.storage.on_destroy = this.on_session_destroy;
+						this.storage.session_expire_time = this.session_expire_time;
 					}else{
 						throw new Error('No session storage defined');
 					}
 			}
 		
-	
-		
+
+		/* 
+		 * Function: start
+		 * 
+		 * Description: This is where the magic happens. This function is the main function of the session manager.
+		 * 
+		 * 
+		 * Input:
+		 * 		request: The node.js request object
+		 * 		response: The node.js response object
+		 * 		next: A callback function
+		 * 
+		 * Output:
+		 * 		None;
+		 * 
+		 *  
+		 */
 		this.start = start;
 		function start(request,response,next)
 			{
 				// Setup defaults
-				this.set_request_blank(request)
+				
+
+				this.set_request_blank(request);
 				
 				// Proxy end() so we can update session values at end
 				var inner_end = response.end;
@@ -224,133 +240,129 @@ function node_session_object()
 				this.cleanup();
 				 
 				// Check if there is a connection available
-				if (this.mongo_string!='')
-					{
-						/*// Delete old sessions
-						this.mongoclient.connect(this.mongo_string,function(err,db){
-							if (!err)
-								{
-									var current_timestamp = new Date().getTime();
-									console.log('current at remove: ' + current_timestamp);
-									db.collection('node_sessions').find({expires: {$lte: current_timestamp}}).toArray(function(err, results){
-										for(var i = 0;i < results.length;i++)
-											{
-												var result = results[i];
-												innerthis.destroy_session(result.sessionid,function(){console.log('go')});
-											}
-										//console.log(results); // output all records
-									});
+				
 									
-								}else{
-									
-								}
-						});*/
+					var cookie_value;
+					if (request.headers.cookie)
+						{
+							cookie_value = this.get_cookie(this.name, request.headers.cookie);
+						}else{
+							cookie_value = '';
+						}
 						
-						var cookie_value;
-						if (request.headers.cookie)
-							{
-								cookie_value = this.get_cookie(this.name, request.headers.cookie);
-							}else{
-								cookie_value = '';
-							}
-							
-						if (cookie_value!='')
-							{
-								// We have the session
-								console.log('session exists');
+					if (cookie_value!='')
+						{
 
-								var innerthis = this;
+							var innerthis = this;
+							
+							// Get stored session data
+							this.get_session(cookie_value,function(full_session){
 								
-								// Get stored session data
-								this.get_session(cookie_value,function(session){
-									var current_timestamp = new Date().getTime();
-									
-									if (session.session_ipaddress != request.connection.remoteAddress && innerthis.ip_matching===true)
-										{
-											// Possible cookie hack!
-											console.log('Access to session from incorrect IP address: should be ' + session.session_ipaddress + ', but is ' + request.connection.remoteAddress);
-											
-											innerthis.invalidate_cookie(innerthis.name,cookie_value,response);
-											
-											/*innerthis.destroy_session(cookie_value,function(){
-												console.log('Emergency Cookie Removal Complete');
-											});*/
+								if (full_session)
+									{
+										var session = JSON.parse(full_session.data);
 										
-											// Go on
-											next(request,response);
+										var current_timestamp = new Date().getTime();
 										
-										// Check if the session being accessed has expired or it is in a to be regenerated
-										}else if (session.session_useragent != request.headers['user-agent'] && innerthis.user_agent_matching===true){
-											
-											// Possible cookie hack!
-											console.log('Access to session from incorrect user agent: should be ' + session.session_useragent + ', but is ' + request.headers['user-agent']);
-											
-											innerthis.invalidate_cookie(innerthis.name,cookie_value,response);
-											
-											// Go on
-											next(request,response);
-											
-										}else if (session.expires < current_timestamp || (innerthis.to_stop.indexOf(cookie_value)!= -1)){	
-											
-											innerthis.regenerate_session(cookie_value,request,response,function(sessionid,session){
-												innerthis.request_setup(request,response,sessionid,session);
+										// Check if IP addresses match
+										if (session.session_ipaddress != request.connection.remoteAddress && innerthis.ip_matching===true)
+											{
+												// Possible cookie hack!
+												console.log('Access to session from incorrect IP address: should be ' + session.session_ipaddress + ', but is ' + request.connection.remoteAddress);
+												
+												innerthis.invalidate_cookie(innerthis.name,cookie_value,response);
 												
 												// Go on
-												next(request,response);
-											});
+												if (innerthis.is_middleware===true)
+													{
+														next();
+													}else{
+														next(request,response);
+													}
 											
 											
-										}else{
-											// Add data to request
-											innerthis.request_setup(request,response,cookie_value,session);
-																				
+											}else if (session.session_useragent != request.headers['user-agent'] && innerthis.user_agent_matching===true){
+												
+												// Possible cookie hack!
+												console.log('Access to session from incorrect user agent: should be ' + session.session_useragent + ', but is ' + request.headers['user-agent']);
+												
+												innerthis.invalidate_cookie(innerthis.name,cookie_value,response);
+												
+												// Go on
+												if (innerthis.is_middleware===true)
+													{
+														next();
+													}else{
+														next(request,response);
+													}
+													
+												
+											// Check if the session being accessed has expired or it is in a to be regenerated	
+											}else if (session.expires < current_timestamp || (innerthis.to_stop.indexOf(cookie_value)!= -1)){	
+												
+												console.log('Expired');
+												
+												innerthis.regenerate_session(cookie_value,request,response,function(sessionid,session){
+													
+												// Go on
+												if (innerthis.is_middleware===true)
+													{
+														next();
+													}else{
+														next(request,response);
+													}
+												});
+												
+												
+											}else{
+												// Add data to request
+												innerthis.set_request_data(request,response,cookie_value,session);
+																					
 
-											// Update Cookie
-											innerthis.set_session_cookie(innerthis.name,cookie_value,response);
-											
-											// Go on
-											next(request,response);
-										}
-									
-									
-									
-									
-								});
-								
-								
-							}else{
-								// Need a new session
-								
-								// Set blank session data
-								
-								this.new_session(request, response, function(sessionid, init_data){
-									
-									// Add data to request
-									innerthis.request_setup(request,response,sessionid,init_data);
-									// Set the cookie
-									
-									
-									// Go on
-									next(request,response);
-								});
-								
-								
-								
-								
-							}
+												// Update Cookie
+												innerthis.set_session_cookie(innerthis.name,cookie_value,response);
+												
+												// Go on
+												if (innerthis.is_middleware===true)
+													{
+														next();
+													}else{
+														next(request,response);
+													}
+											}
+									}else{
+										// Need a new session
+							
+										// Set blank session data
+										
+										innerthis.new_session(request, response, function(sessionid, init_data){
+												// Go on
+												if (innerthis.is_middleware===true)
+													{
+														next();
+													}else{
+														next(request,response);
+													}
+										});
+									}
+							});
+						}else{
+							// Need a new session
+							this.new_session(request, response, function(sessionid, init_data){
+								next(request,response);
+							});
+						}
 						
 							
 							
 					
 							
-					}else{
-						throw new Error('No database connection string has been given');
-					}
+					
 				
 			}
-
-		this.request_setup = request_setup;
-		function request_setup(request,response,sessionid,session_data)
+		
+		this.set_request_data = set_request_data;
+		function set_request_data(request,response,sessionid,session_data)
 			{
 				var innerthis = this
 				
@@ -366,7 +378,6 @@ function node_session_object()
 					{
 						innerthis.stop_session(request,response,callback);
 					}	
-				return request;
 			}
 		
 		this.set_request_blank = set_request_blank;
@@ -387,21 +398,28 @@ function node_session_object()
 		function new_session(request,response,callback)
 			{
 				var innerthis = this;
-			
-				
+
 				this.new_session_id(function(sessionid){
 					
+						// If the in_session_create function is defined, call it
 						if (typeof(innerthis.on_session_create) == "function")
 							{
 									innerthis.on_session_create(sessionid);
 							}
 						
+						// Create init data, which consists of the accessing device's IP address and user agent, used for security functionality
 						var init_data = {session_ipaddress: request.connection.remoteAddress, session_useragent: request.headers['user-agent']};
 						
-						// Save blank session to database
+						// Save new session to database
 						innerthis.save_session(sessionid,init_data,function(){
 							
+							// Set the session cookie
 							innerthis.set_session_cookie(innerthis.name,sessionid,response);
+							
+							// Set the data to the request object
+							innerthis.set_request_data(request,response,sessionid,init_data);
+							
+							// Execute the callback
 							callback(sessionid,init_data);
 							
 						});
@@ -409,6 +427,20 @@ function node_session_object()
 				});
 			}
 		
+		/* 
+		 * Function: regenerate_session
+		 * 
+		 * Description: This function deletes the current session given by sessionid and creates a new one
+		 * 
+		 * 
+		 * Input:
+		 * 		
+		 * 
+		 * Output:
+		 * 		None;
+		 * 
+		 *  
+		 */
 		this.regenerate_session = regenerate_session;
 		function regenerate_session(sessionid,request,response,callback)
 			{
@@ -454,37 +486,69 @@ function node_session_object()
 				var innerthis = this;
 				
 				
-				if (this.mongo_string)
-					{
-						this.mongoclient.connect(this.mongo_string,function(err,db){
-							if (!err)
-								{
-									if (typeof(innerthis.on_session_destroy) == "function")
-											{
-												var session_data = innerthis.get_session(sessionid,function(session){
-													
-													innerthis.on_session_destroy(sessionid,session_data)
-												});
-												
-											}
-									
-									
-									
-									db.collection('node_sessions').remove({sessionid: sessionid},{safe: true}, function(err, records){
-											console.log(records + " removed");
-											
-											
-											callback(records);
-										}); 
-								}else{
-									
-								}
-						});
-					}else{
-							console.log('no mongodb string')
-					}
+				this.storage.destroy_session(sessionid,callback);
 				
 			}
+		
+		this.new_session_id = new_session_id;
+		function new_session_id(callback)
+			{
+				// Generate session id
+				var sessionid = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(4) + Math.random().toString(36).slice(2);
+				
+				var innerthis = this;
+				this.check_session_id(sessionid,function(result){
+					if (result==true)
+						{
+							callback(sessionid);
+						}else{
+							innerthis.new_session_id(callback)
+						}
+				});
+				
+			}
+		
+		this.cleanup = cleanup;
+		function cleanup()
+			{
+				this.storage.cleanup();
+			}
+		
+		
+		this.stop_session = stop_session
+		function stop_session(request,response,callback)
+			{
+				var sessionid = request.sessionid;
+				
+				this.to_stop.push(sessionid);
+			}
+		
+		this.check_session_id = check_session_id;
+		function check_session_id(sessionid,callback)
+			{
+				this.get_session(sessionid,function(session){
+					if (session)
+						{
+							callback(false);
+						}else{
+							callback(true);
+						}
+				});
+
+			}
+	
+		this.get_session = get_session;
+		function get_session(sessionid,callback)
+			{
+				this.storage.get_session(sessionid,callback);
+			}
+		
+		this.save_session = save_session;
+		function save_session(sessionid,data,callback)
+			{
+				this.storage.save_session(sessionid,data,callback);
+			}
+		
 		
 		
 		
@@ -591,8 +655,9 @@ function node_session_object()
 				if(values.expire_time&&values.expire_time!='expire_now')
 					{
 						var max_age = values.expire_time;
-						var expires = add_seconds(new Date(Date.now()),max_age).toUTCString();
 						
+						var now_date = new Date(Date.now());
+						var expires = new Date(now_date.getTime() + max_age*1000).toUTCString();
 						
 						cookie_string += 'Expires=' + expires + '; Max-Age=' + max_age + "; " ;
 					}else if (values.expire_time=='expire_now'){
@@ -629,7 +694,7 @@ function node_session_object()
 			{
 				if (cookie)
 					{
-						//console.log(cookie);
+						
 						var s_cookie = cookie.split(';');
 						
 						var cookie_value = '';
@@ -682,140 +747,25 @@ function node_session_object()
 					}
 			}
 			
-		this.add_seconds = add_seconds;
-		function add_seconds(date, seconds) {
-			return new Date(date.getTime() + seconds*1000);
-		}
+
 	
-	
-		this.new_session_id = new_session_id;
-		function new_session_id(callback)
-			{
-				// Generate session id
-				var sessionid = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(4) + Math.random().toString(36).slice(2);
-				
-				var innerthis = this;
-				this.check_session_id(sessionid,function(result){
-					if (result==true)
-						{
-							callback(sessionid);
-						}else{
-							innerthis.new_session_id(callback)
-						}
-				});
-				
-			}
 		
-		this.cleanup = cleanup;
-		function cleanup()
-			{
-				this.storage.cleanup();
-			}
-		
-		
-		this.stop_session = stop_session
-		function stop_session(request,response,callback)
-			{
-				var sessionid = request.sessionid;
-				console.log("stop " + sessionid);
-				
-				this.to_stop.push(sessionid);
-			}
-		
-		this.check_session_id = check_session_id;
-		function check_session_id(sessionid,callback)
-			{
-				this.mongoclient.connect(this.mongo_string,function(err,db){
-					
-					if (err)
-						{
-							throw new Error('Error in connecting to database');
-						}
-					
-					db.collection('node_sessions').findOne({sessionid: sessionid}, function(err, session){
-						if (session)
-							{
-								console.log(sessionid + ' already exists')
-								callback(false);
-							}else{
-								callback(true);
-							}
-					});
-						
-				});
-			}
-	
-		this.get_session = get_session;
-		function get_session(sessionid,callback)
-			{
-				this.mongoclient.connect(this.mongo_string,function(err,db){
-					db.collection('node_sessions').findOne({sessionid: sessionid}, function(err,session){
-						if (session)
-							{
-								callback(JSON.parse(session.data))
-							}else{
-								console.log('Got nothing on session');
-								callback({});
-							}
-					}); 
-				
-				
-				});	
-			}
-		
-		this.save_session = save_session;
-		function save_session(sessionid,data,callback)
-			{
-				this.storage.save_session(sessionid,data,callback);
-				
-				/*var innerthis = this;
-				
-				this.mongoclient.connect(this.mongo_string,function(err,db){
-					
-					db.collection('node_sessions').findOne({sessionid: sessionid}, function(err,session){
-						var base_timestamp = new Date().getTime();
-					
-					
-						var timestamp = base_timestamp + (innerthis.session_expire_time * 1000);
-						
-					
-						
-						
-						var serialized_data = JSON.stringify(data);
-						console.log(serialized_data);
-						if (typeof(innerthis.on_session_update) == "function")
-							{
-								innerthis.on_session_update(sessionid,serialized_data)
-							}
-						
-						if (session)
-							{
-								console.log('updating Session ' + sessionid);
-								db.collection('node_sessions').save({_id: session._id,sessionid: sessionid, data: serialized_data, expires: timestamp}, {safe: true}, function(err, records){
-									
-									callback();
-									
-								});
-							}else{
-								console.log('inserting Session ' + sessionid);
-								db.collection('node_sessions').save({sessionid: sessionid, data: serialized_data, expires: timestamp}, {safe: true}, function(err, records){
-									
-									callback();
-									
-								});
-							}
-					});
-					
-					
-					
-				});*/
-			}
 	}
 
-
+var session_middleware_config = '';
 
 module.exports = {
 	session: node_session_object,
+	session_middleware: function(request,response,next){
+		var new_session = new node_session_object();
+		new_session.setup(session_middleware_config);
+		
+		new_session.start(request,response,next);
+	},
+	middleware_config: function(values){
+		values.is_middleware = true;
+		session_middleware_config = values;
+	}
 }
 
 

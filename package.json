@@ -1,7 +1,7 @@
 {
   "name": "node-session",
   "author": "Jacob Hartman <junyunharold1@gmail.com>",
-  "description": "A session manager highly configurable but simple to use",
+  "description": "A node.js session manager, highly configurable, but simple to use",
   "version": "0.0.7",
   "main":"node_session",
   "dependencies": {

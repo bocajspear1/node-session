@@ -11,6 +11,8 @@ function mongodb_node_session(values)
 		
 		this.on_destroy = '';
 		
+		this.session_expire_time = '';
+		
 		this.save_session = save_session;
 		function save_session(sessionid,data,callback)
 			{
@@ -29,7 +31,7 @@ function mongodb_node_session(values)
 						var timestamp = base_timestamp + (innerthis.session_expire_time * 1000);
 						
 						var serialized_data = JSON.stringify(data);
-						console.log(serialized_data);
+						
 						if (typeof(this.on_save) == "function")
 							{
 								this.on_save(sessionid,data)
@@ -37,14 +39,14 @@ function mongodb_node_session(values)
 						
 						if (session)
 							{
-								console.log('updating Session ' + sessionid);
+								
 								db.collection('node_sessions').save({_id: session._id,sessionid: sessionid, data: serialized_data, expires: timestamp}, {safe: true}, function(err, records){
 									
 									callback();
 									
 								});
 							}else{
-								console.log('inserting Session ' + sessionid);
+								
 								db.collection('node_sessions').save({sessionid: sessionid, data: serialized_data, expires: timestamp}, {safe: true}, function(err, records){
 									
 									callback();
@@ -68,13 +70,19 @@ function mongodb_node_session(values)
 				
 					
 				this.mongoclient.connect(this.connection_string,function(err,db){
+					
+					if (err)
+						{
+							console.log(err);
+							throw new Error('Error in database connection');
+						}
 					db.collection('node_sessions').findOne({sessionid: sessionid}, function(err,session){
 						if (session)
 							{
-								callback(JSON.parse(session.data))
+								callback(session)
 							}else{
-								console.log('Got nothing on session');
-								callback({});
+								
+								callback(null);
 							}
 					}); 
 				
@@ -104,7 +112,7 @@ function mongodb_node_session(values)
 										}
 								
 								db.collection('node_sessions').remove({sessionid: sessionid},{safe: true}, function(err, records){
-										console.log(records + " removed");
+
 										callback(records);
 									}); 
 							}else{
@@ -116,6 +124,7 @@ function mongodb_node_session(values)
 		this.cleanup = cleanup;
 		function cleanup()
 			{
+				
 				if (!this.connection_string)	
 					{
 						throw new Error('No connection string was defined');
@@ -127,12 +136,12 @@ function mongodb_node_session(values)
 					if (!err)
 						{
 							var current_timestamp = new Date().getTime();
-							console.log('current at remove: ' + current_timestamp);
+							
 							db.collection('node_sessions').find({expires: {$lte: current_timestamp}}).toArray(function(err, results){
 								for(var i = 0;i < results.length;i++)
 									{
 										var result = results[i];
-										innerthis.destroy_session(result.sessionid,function(){console.log('go')});
+										innerthis.destroy_session(result.sessionid,function(){});
 									}
 								
 							});
