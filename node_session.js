@@ -25,7 +25,7 @@ function node_session_object()
 		this.cookie_expire_time = '';
 		
 		// Setting for httponly in cookie, on by default
-		this.http_only = ''
+		this.http_only = '';
 		
 		// Setting for Secure in cookie, off by default
 		this.secure_only = '';
@@ -84,6 +84,21 @@ function node_session_object()
 						this.is_middleware = values.is_middleware;
 					} 
 				
+				if (values.name)
+					{
+						this.name = values.name;
+					}
+				
+				if (values.cookie_path)
+					{
+						this.cookie_path = values.cookie_path;
+					} 
+					
+				if (values.cookie_domain)
+					{
+						this.cookie_domain = values.cookie_domain;
+					} 
+				
 				// Check if there are can be an expire time for the session
 				if (!values.expire_time&&!values.session_expire_time)
 					{
@@ -101,8 +116,8 @@ function node_session_object()
 				if (values.type=='session')
 					{
 						this.type = 'session';
-					}else if (values.type=='persistant'){
-						this.type = 'persistant';
+					}else if (values.type=='persistent'){
+						this.type = 'persistent';
 						
 						// If there is no cookie expire value set, then default to just expire_time
 						if (!values.cookie_expire_value)
@@ -113,6 +128,8 @@ function node_session_object()
 							}
 							
 						
+					}else{
+						throw new Error('Invalid entry for session type');
 					}
 				
 				if (values.http_only)
@@ -143,6 +160,16 @@ function node_session_object()
 								this.ip_matching = values.ip_matching;
 							}else{
 								throw new Error('Invalid entry for ip_matching, only takes true or false');
+							}
+					}
+				
+				if (values.user_agent_matching)
+					{
+						if (values.user_agent_matching===true||values.user_agent_matching===false)
+							{
+								this.user_agent_matching = values.user_agent_matching;
+							}else{
+								throw new Error('Invalid entry for user_agent_matching, only takes true or false');
 							}
 					}
 				
@@ -260,7 +287,7 @@ function node_session_object()
 								
 								if (full_session)
 									{
-										var session = JSON.parse(full_session.data);
+										var session = full_session.data;
 										
 										var current_timestamp = new Date().getTime();
 										
@@ -349,7 +376,12 @@ function node_session_object()
 						}else{
 							// Need a new session
 							this.new_session(request, response, function(sessionid, init_data){
-								next(request,response);
+								if (innerthis.is_middleware===true)
+									{
+										next();
+									}else{
+										next(request,response);
+									}
 							});
 						}
 						

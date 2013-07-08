@@ -79,6 +79,8 @@ function mongodb_node_session(values)
 					db.collection('node_sessions').findOne({sessionid: sessionid}, function(err,session){
 						if (session)
 							{
+								var temp = session.data;
+								session.data = JSON.parse(temp);
 								callback(session)
 							}else{
 								
